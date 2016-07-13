@@ -18,6 +18,9 @@ NUM_CLASSES = nerveseg_input.NUM_CLASSES
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = nerveseg_input.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN
 #NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = nerveseg_input.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL
 
+# weight decay
+WD=5e-4
+
 
 # Constants describing the training process.
 MOVING_AVERAGE_DECAY = 0.9999     # The decay to use for the moving average.
@@ -76,7 +79,7 @@ def _variable_on_cpu(name, shape, initializer):
     var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
   return var
 
-def _variable_with_weight_decay(name, shape, stddev, wd):
+def _variable_with_weight_decay(name, shape, stddev=None, wd=None):
   """Helper to create an initialized Variable with weight decay.
 
   Note that the Variable is initialized with a truncated normal distribution.
@@ -92,11 +95,12 @@ def _variable_with_weight_decay(name, shape, stddev, wd):
   Returns:
     Variable Tensor
   """
+  ## XX (mtourne: stddev not used anymore with xavier init)
   dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
   var = _variable_on_cpu(
-      name,
-      shape,
-      tf.truncated_normal_initializer(stddev=stddev, dtype=dtype))
+    name,
+    shape,
+    tf.contrib.layers.xavier_initializer(dtype=dtype))
   if wd is not None:
     weight_decay = tf.mul(tf.nn.l2_loss(var), wd, name='weight_loss')
     tf.add_to_collection('losses', weight_decay)
@@ -129,11 +133,7 @@ def add_conv_relu(bottom_layer, features, name, in_features=None):
     kernel = _variable_with_weight_decay('weights',
                                          shape=[3, 3, in_features, features],
                                          stddev=5e-2,
-                                         wd=0.0)
-    #kernel = _variable_with_weight_decay('weights',
-    #                                     shape=[3, 3, in_features, features],
-    #                                     stddev=5e-2,
-    #                                     wd=None)
+                                         wd=WD)
     conv = tf.nn.conv2d(bottom_layer, kernel, [1, 1, 1, 1], padding='SAME')
     biases = _variable_on_cpu('biases', [features], tf.constant_initializer(0.0))
     bias = tf.nn.bias_add(conv, biases)
@@ -174,7 +174,12 @@ def add_deconv(bottom_layer, features, name, match_layer_shape=None):
     # filter has its out_features, in_features reversed compared to
     # kernel for conv2d
     f_shape = [ k_size, k_size, features, in_features ]
-    weights = get_deconv_filter(f_shape)
+    # weights is bilinear filter from FCN
+    # try with xavier like in u-net release
+    # kernel = get_deconv_filter(f_shape)
+    kernel = _variable_with_weight_decay('weights',
+                                         shape=f_shape,
+                                         wd=WD)
 
     if match_layer_shape is None:
       in_shape = tf.shape(bottom_layer)
@@ -189,8 +194,12 @@ def add_deconv(bottom_layer, features, name, match_layer_shape=None):
       w = in_shape[2]
     new_shape = [in_shape[0], h, w, features]
     output_shape = tf.pack(new_shape)
-    deconv = tf.nn.conv2d_transpose(bottom_layer, weights, output_shape,
+    deconv = tf.nn.conv2d_transpose(bottom_layer, kernel, output_shape,
                                     [1, stride, stride, 1], padding='SAME')
+    # add biases and relu
+    biases = _variable_on_cpu('biases', [features], tf.constant_initializer(0.0))
+    bias = tf.nn.bias_add(deconconv, biases)
+    deconv = tf.nn.relu(bias, name=scope.name)
     if FLAGS.debug:
       deconv = tf.Print(deconv, [tf.shape(deconv)],
                         message='Shape of {}'.format(name),
@@ -210,45 +219,34 @@ def inference(images):
 
   pool1 = tf.nn.max_pool(conv1_2, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1],
                          padding='SAME', name='pool1')
-
-  norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-                    name='norm1')
-  #out1 = norm1
   out1 = pool1
 
   conv2_1 = add_conv_relu(out1, 128, 'conv2_1')
   conv2_2 = add_conv_relu(conv2_1, 128, 'conv2_2')
 
-  # norm before pool or vice versa ?
   pool2 = tf.nn.max_pool(conv2_2, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1],
                          padding='SAME', name='pool2')
 
-  norm2 = tf.nn.lrn(pool2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-                    name='norm2')
-  #out2 = norm2
   out2 = pool2
 
   conv3_1 = add_conv_relu(out2, 256, 'conv3_1')
   conv3_2 = add_conv_relu(conv3_1, 256, 'conv3_2')
 
+  # u-net realease has a dropout before pool3 at training time
+
   pool3 = tf.nn.max_pool(conv3_2, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1],
                          padding='SAME', name='pool3')
 
-  norm3 = tf.nn.lrn(pool3, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-                    name='norm3')
-  #out3 = norm3
   out3 = pool3
 
   conv4_1 = add_conv_relu(out3, 512, 'conv4_1')
   conv4_2 = add_conv_relu(conv4_1, 512, 'conv4_2')
 
+  # u-net realease has a dropout before pool4 at training time
+
   pool4 = tf.nn.max_pool(conv4_2, ksize=[1, 3, 3, 1], strides=[1, 2, 2, 1],
                          padding='SAME', name='pool4')
 
-  norm4 = tf.nn.lrn(pool4, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75,
-                    name='norm4')
-
-  #out4 = norm4
   out4 = pool4
 
   conv5_1 = add_conv_relu(out4, 1024, 'conv5_1')
