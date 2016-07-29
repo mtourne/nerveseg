@@ -51,9 +51,8 @@ def pred_once(saver, summary_writer, pred, summary_op, feed_dict):
     predictions = np.array(predictions[0])
     # squeeze depth dimension, to be only height x width
     predictions = np.squeeze(predictions, axis=(0,))
-    element_max = np.amax(predictions)
-    print("element max: {}".format(element_max))
     colored = color_image(predictions)
+    print("Writing output.png")
     scp.misc.imsave('output.png', colored)
 
 def pred():
@@ -66,11 +65,14 @@ def pred():
                                  nerveseg_input.IMG_WIDTH, 1))
         feed_dict = {images: img1}
 
+        # preprocess input image the same as training data.
+        images = nerveseg_input.preprocess_image(images)
+
         batch_images = tf.expand_dims(images, 0)
         # resize image to mimic nerveseg_input.py
-        img_rows = 64
-        img_cols = 80
-        batch_images  = tf.image.resize_bicubic(batch_images, [img_rows, img_cols], name='resize_image')
+        #img_rows = 64
+        #img_cols = 80
+        #batch_images  = tf.image.resize_bicubic(batch_images, [img_rows, img_cols], name='resize_image')
         logits, pred = nerveseg.inference(batch_images)
 
         # Restore the moving average version of the learned variables for eval.

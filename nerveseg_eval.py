@@ -17,8 +17,6 @@ tf.app.flags.DEFINE_string('checkpoint_dir', '/tmp/nerveseg',
                            """Directory where to read model checkpoints.""")
 tf.app.flags.DEFINE_string('eval_dir', '/tmp/nerveseg_eval',
                            """Directory where to write event logs.""")
-tf.app.flags.DEFINE_integer('num_examples', 1,
-                            """Number of examples to run.""")
 
 MOVING_AVERAGE_DECAY = 0.9999     # The decay to use for the moving average.
 
@@ -49,17 +47,15 @@ def pred_once(saver, summary_writer, pred, summary_op):
         threads.extend(qr.create_threads(sess, coord=coord, daemon=True,
                                          start=True))
 
-      num_iter = int(math.ceil(FLAGS.num_examples / FLAGS.batch_size))
-      true_count = 0  # Counts the number of correct predictions.
-      total_sample_count = num_iter * FLAGS.batch_size
-      step = 0
-      while step < num_iter and not coord.should_stop():
-          step += 1
+      while not coord.should_stop():
           predictions = sess.run([pred])
-          predictions = np.array(predictions[0])
+          predictions = np.array(predictions)
+          predictions = np.transpose(predictions, axes=[1, 0, 2, 3])
+          predictions = predictions[0]
           # squeeze depth dimension, to be only height x width
-          print(predictions.shape)
           predictions = np.squeeze(predictions, axis=(0,))
+          element_max = np.amax(predictions)
+          print("element max: {}".format(element_max))
           print(predictions.shape)
           colored = color_image(predictions)
           print(colored.shape)
